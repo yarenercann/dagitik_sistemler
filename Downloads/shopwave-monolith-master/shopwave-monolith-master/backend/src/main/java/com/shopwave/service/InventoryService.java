@@ -9,6 +9,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.annotation.Value;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 import java.util.List;
 
 /**
@@ -34,6 +36,8 @@ public class InventoryService {
     @Value("${shopwave.timeout.stock-reservation-ms:2000}")
     private long stockReservationDeadlineMs;
     private final AuditService        auditService;
+    // Idempotency cache
+    private final Map<String, Boolean> processedRequests = new ConcurrentHashMap<>();
 
     // ─── Queries ──────────────────────────────────────────────
 
@@ -60,18 +64,24 @@ public class InventoryService {
      *   taşınırsa bu metot HTTP'ye dönüşür ve DB lock artık kullanılamaz.
      */
     @Transactional
-public void reserve(Long productId, int quantity) {
+public void reserve(Long productId, int quantity, String requestId) {
+
+    // ✅ Idempotency kontrolü (BAŞTA)
+    if (requestId != null && processedRequests.containsKey(requestId)) {
+        log.warn("Duplicate request detected, skipping. requestId={}", requestId);
+        return;
+    }
+
     long startTime = System.currentTimeMillis();
 
-    // LAB-2: Latency + jitter enjeksiyonu
+    // latency + jitter
     chaosDelayService.applyDelay("reserveStock");
 
-    // LAB-4: Timeout / deadline kontrolü
+    // deadline
     checkDeadline("reserveStock", startTime, stockReservationDeadlineMs);
 
     Inventory inv = inventoryRepository.findByProductIdWithLock(productId)
             .orElseThrow(() -> new NotFoundException("Inventory not found: " + productId));
-
 
     if (!inv.canReserve(quantity)) {
         throw new InsufficientStockException(productId, inv.availableQuantity(), quantity);
@@ -80,13 +90,17 @@ public void reserve(Long productId, int quantity) {
     inv.reserve(quantity);
     inventoryRepository.save(inv);
 
+    // ✅ SADECE BAŞARILIYSA kaydet
+    if (requestId != null) {
+        processedRequests.put(requestId, true);
+    }
+
     auditService.log("STOCK_RESERVED", "Inventory", productId,
             "qty=" + quantity + " remaining=" + inv.availableQuantity());
 
-    log.info("Stock reserved productId={} qty={} available={}",
-            productId, quantity, inv.availableQuantity());
+    log.info("Stock reserved productId={} qty={} available={} requestId={}",
+            productId, quantity, inv.availableQuantity(), requestId);
 }
-
     /** Sipariş iptalinde rezervasyonu geri bırak. */
     @Transactional
     public void release(Long productId, int quantity) {

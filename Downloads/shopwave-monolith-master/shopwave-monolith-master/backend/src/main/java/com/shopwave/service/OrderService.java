@@ -107,7 +107,9 @@ public class OrderService {
 
             // InventoryService.reserve() bu transaction'a katılır.
             // Dağıtık mimaride bu satır HTTP çağrısına dönüşecek → atomiklik bozulacak.
-            inventoryService.reserve(product.getId(), itemReq.getQuantity());
+            String requestId = UUID.randomUUID().toString();
+
+            inventoryService.reserve(product.getId(), itemReq.getQuantity(), requestId);
 
             OrderItem item = OrderItem.builder()
                     .order(order)
