@@ -10,7 +10,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Random;
 
 /**
  * InventoryService — stok rezervasyon ve güncelleme işlemleri.
@@ -32,21 +31,6 @@ public class InventoryService {
 
     private final InventoryRepository inventoryRepository;
     private final AuditService        auditService;
-
-    // LAB-2: Jitter için rastgele ek gecikme üretmekte kullanılır.
-    private final Random random = new Random();
-
-    // LAB-2: application.properties üzerinden chaos delay aktif/pasif yapılır.
-    @org.springframework.beans.factory.annotation.Value("${shopwave.chaos.delay.enabled:false}")
-    private boolean delayEnabled;
-
-    // LAB-2: Her stok rezervasyonunda uygulanacak sabit gecikme süresi.
-    @org.springframework.beans.factory.annotation.Value("${shopwave.chaos.delay.fixed-ms:0}")
-    private long fixedDelay;
-
-    // LAB-2: Sabit gecikmeye eklenecek rastgele jitter süresi.
-    @org.springframework.beans.factory.annotation.Value("${shopwave.chaos.delay.jitter-ms:0}")
-    private long jitterDelay;
 
     // ─── Queries ──────────────────────────────────────────────
 
@@ -74,27 +58,7 @@ public class InventoryService {
      */
     @Transactional
     public void reserve(Long productId, int quantity) {
-        // LAB-2: Yapay latency + jitter ekleniyor.
-        // Amaç: stok rezervasyonu sırasında gecikme oluşturarak
-        // eş zamanlı isteklerde sistem davranışını gözlemlemek.
-        if (delayEnabled) {
-            long delay = fixedDelay;
-
-            // Jitter: sabit gecikmeye 0 ile jitterDelay arasında
-            // rastgele ek gecikme eklenir.
-            if (jitterDelay > 0) {
-                delay += random.nextLong(jitterDelay + 1);
-            }
-
-            log.warn("LAB-2 Chaos delay applied on reserve(): {} ms", delay);
-
-            try {
-                Thread.sleep(delay);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
+        // TODO LAB-2: yapay gecikme ekle (chaos delay) → race condition gözlemle
         Inventory inv = inventoryRepository.findByProductIdWithLock(productId)
                 .orElseThrow(() -> new NotFoundException("Inventory not found: " + productId));
 
