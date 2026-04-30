@@ -8,7 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
+import org.springframework.beans.factory.annotation.Value;
 import java.util.List;
 
 /**
@@ -28,8 +28,11 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class InventoryService {
-    private final ChaosDelayService chaosDelayService;
+
     private final InventoryRepository inventoryRepository;
+    private final ChaosDelayService chaosDelayService;
+    @Value("${shopwave.timeout.stock-reservation-ms:2000}")
+    private long stockReservationDeadlineMs;
     private final AuditService        auditService;
 
     // ─── Queries ──────────────────────────────────────────────
@@ -57,23 +60,32 @@ public class InventoryService {
      *   taşınırsa bu metot HTTP'ye dönüşür ve DB lock artık kullanılamaz.
      */
     @Transactional
-    public void reserve(Long productId, int quantity) {
-        // TODO LAB-2: yapay gecikme ekle (chaos delay) → race condition gözlemle
-         chaosDelayService.applyDelay("reserveStock");
-        Inventory inv = inventoryRepository.findByProductIdWithLock(productId)
-                .orElseThrow(() -> new NotFoundException("Inventory not found: " + productId));
+public void reserve(Long productId, int quantity) {
+    long startTime = System.currentTimeMillis();
 
-        if (!inv.canReserve(quantity)) {
-            throw new InsufficientStockException(productId, inv.availableQuantity(), quantity);
-        }
+    // LAB-2: Latency + jitter enjeksiyonu
+    chaosDelayService.applyDelay("reserveStock");
 
-        inv.reserve(quantity);
-        inventoryRepository.save(inv);
+    // LAB-4: Timeout / deadline kontrolü
+    checkDeadline("reserveStock", startTime, stockReservationDeadlineMs);
 
-        auditService.log("STOCK_RESERVED", "Inventory", productId,
-                "qty=" + quantity + " remaining=" + inv.availableQuantity());
-        log.info("Stock reserved productId={} qty={} available={}", productId, quantity, inv.availableQuantity());
+    Inventory inv = inventoryRepository.findByProductIdWithLock(productId)
+            .orElseThrow(() -> new NotFoundException("Inventory not found: " + productId));
+
+
+    if (!inv.canReserve(quantity)) {
+        throw new InsufficientStockException(productId, inv.availableQuantity(), quantity);
     }
+
+    inv.reserve(quantity);
+    inventoryRepository.save(inv);
+
+    auditService.log("STOCK_RESERVED", "Inventory", productId,
+            "qty=" + quantity + " remaining=" + inv.availableQuantity());
+
+    log.info("Stock reserved productId={} qty={} available={}",
+            productId, quantity, inv.availableQuantity());
+}
 
     /** Sipariş iptalinde rezervasyonu geri bırak. */
     @Transactional
@@ -114,4 +126,16 @@ public class InventoryService {
                 "added=" + quantity + " total=" + inv.getQuantity());
         log.info("Stock added productId={} qty={} total={}", productId, quantity, inv.getQuantity());
     }
+    private void checkDeadline(String operation, long startTime, long deadlineMs) {
+    long elapsedMs = System.currentTimeMillis() - startTime;
+
+    if (elapsedMs > deadlineMs) {
+        log.warn("Deadline exceeded. operation={} elapsedMs={} deadlineMs={}",
+                operation, elapsedMs, deadlineMs);
+
+        throw new RuntimeException(
+                operation + " deadline exceeded. elapsedMs=" + elapsedMs + " deadlineMs=" + deadlineMs
+        );
+    }
+}
 }
