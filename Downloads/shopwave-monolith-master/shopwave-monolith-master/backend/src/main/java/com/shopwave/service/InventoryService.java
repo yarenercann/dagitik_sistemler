@@ -28,7 +28,7 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class InventoryService {
-
+    private final ChaosDelayService chaosDelayService;
     private final InventoryRepository inventoryRepository;
     private final AuditService        auditService;
 
@@ -59,6 +59,7 @@ public class InventoryService {
     @Transactional
     public void reserve(Long productId, int quantity) {
         // TODO LAB-2: yapay gecikme ekle (chaos delay) → race condition gözlemle
+         chaosDelayService.applyDelay("reserveStock");
         Inventory inv = inventoryRepository.findByProductIdWithLock(productId)
                 .orElseThrow(() -> new NotFoundException("Inventory not found: " + productId));
 
